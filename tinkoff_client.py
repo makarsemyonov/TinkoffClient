@@ -39,7 +39,6 @@ class TinkoffClient:
                 raise ValueError(f"Stock '{value}' not found.")
             self._ticker = value
             self._figi = instrument.figi
-        print(f"[OK] Ticker set to {self._ticker}, FIGI: {self._figi}")
 
     @property
     def figi(self):
@@ -59,7 +58,6 @@ class TinkoffClient:
                 raise ValueError(f"Account '{value}' not found. Available: {available}")
             self._account_name = acc.name
             self._account_id = acc.id
-        print(f"[OK] Account set to '{self._account_name}' (ID: {self._account_id})")
 
     @property
     def account_id(self):
@@ -76,7 +74,6 @@ class TinkoffClient:
                     return None
                 elif status in [OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_REJECTED,
                                 OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_CANCELLED]:
-                    print(f"[INFO] Order {order_id} {status.name.lower()}")
                     return None
                 time.sleep(0.5)
         print(f"[WARN] Order {order_id} not filled after waiting.")
@@ -93,7 +90,6 @@ class TinkoffClient:
         with Client(self.token) as client:
             prices = client.market_data.get_last_prices(figi=[self._figi]).last_prices
             price = float(quotation_to_decimal(prices[0].price))
-        print(f"[PRICE] {self._ticker}: {price}")
         return price
 
     def get_history(self, start: str, end: str, interval: str = "1d") -> pd.DataFrame:
@@ -116,7 +112,6 @@ class TinkoffClient:
             return pd.DataFrame(columns=["TIMESTAMP", "PRICE"])
         df = pd.DataFrame([{"TIMESTAMP": c.time.astimezone(MOSCOW_TZ),
                             "PRICE": float(quotation_to_decimal(c.close))} for c in candles])
-        print(f"[HISTORY] {self._ticker} from {start} to {end}, {len(df)} rows")
         return df
 
     def fetch_prices(self, n: int = 10, interval: str = "1m") -> pd.DataFrame:
