@@ -119,6 +119,53 @@ class TinkoffClient:
         print(f"[HISTORY] {self._ticker} from {start} to {end}, {len(df)} rows")
         return df
 
+    def fetch_prices(self, n: int = 10, interval: str = "1m") -> pd.DataFrame:
+        if not self._figi:
+            raise ValueError("Ticker not set.")
+
+        interval_map = {
+            "1d": CandleInterval.CANDLE_INTERVAL_DAY,
+            "1h": CandleInterval.CANDLE_INTERVAL_HOUR,
+            "10m": CandleInterval.CANDLE_INTERVAL_10_MIN,
+            "1m": CandleInterval.CANDLE_INTERVAL_1_MIN,
+        }
+        if interval not in interval_map:
+            raise ValueError("interval must be one of: '1d', '1h', '10m', '1m'")
+
+        to_time = datetime.now(tz=timezone.utc)
+        if interval == "1d":
+            delta = timedelta(days=n)
+        elif interval == "1h":
+            delta = timedelta(hours=n)
+        elif interval == "10m":
+            delta = timedelta(minutes=10 * n)
+        elif interval == "1m":
+            delta = timedelta(minutes=n)
+        from_time = to_time - delta
+
+        MOSCOW_TZ = timezone(timedelta(hours=3))
+
+        with Client(self.token) as client:
+            candles = client.market_data.get_candles(
+                figi=self._figi,
+                from_=from_time,
+                to=to_time,
+                interval=interval_map[interval],
+            ).candles
+
+        data = [
+            {
+                "TIMESTAMP": c.time.astimezone(MOSCOW_TZ),
+                "PRICE": float(quotation_to_decimal(c.close)),
+            }
+            for c in candles
+        ]
+
+        df = pd.DataFrame(data)
+        df.sort_values("TIMESTAMP", inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
+
     def buy(self, quantity: int, price: float = None):
         if not self._figi or not self._account_id:
             raise ValueError("Ticker or account not set.")
