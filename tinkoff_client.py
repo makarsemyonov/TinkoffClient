@@ -220,3 +220,10 @@ class TinkoffClient:
 
     def short_take_profit(self, stop_price: float, exec_price: float, quantity: int):
         return self.place_stop_order(stop_price, exec_price, quantity, direction="BUY", order_type="TAKE_PROFIT")
+    
+    def check_status(self, order_id: str) -> bool:
+        with Client(self.token) as client:
+            active_stops = client.stop_orders.get_stop_orders(account_id=self._account_id).stop_orders
+            if any(s.stop_order_id == order_id for s in active_stops):
+                return False           
+        return True
