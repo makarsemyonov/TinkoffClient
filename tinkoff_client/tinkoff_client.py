@@ -83,7 +83,6 @@ class TinkoffClient:
 
     return order.order_id
     
-
   def sell(self, account: str, ticker: str, quantity: int, price: float = None):
     account_id = self._get_account_id(account)
     figi = self._get_figi(ticker)
@@ -114,7 +113,6 @@ class TinkoffClient:
         )
     }
 
-  
   def _place_stop_order(self, account_id: str, figi: str,
     quantity: int, stop_price: float, exec_price: float,
     direction: str, order_type: str) -> str:
@@ -162,3 +160,25 @@ class TinkoffClient:
     account_id = self._get_account_id(account)
     figi = self._get_figi(ticker)
     return self._place_stop_order(account_id, figi, quantity, stop_price, exec_price, "BUY", "TAKE_PROFIT")
+
+  def get_current_price(self, ticker: str) -> float:
+    figi = self._get_figi(ticker)
+    with Client(self.token) as client:
+      orderbook = client.market_data.get_order_book(
+        figi=figi,
+        depth=1  
+      )
+    if orderbook.last_price is not None:
+      return float(quotation_to_decimal(orderbook.last_price))
+    
+    bid_price = quotation_to_decimal(orderbook.bids[0].price) if orderbook.bids else None
+    ask_price = quotation_to_decimal(orderbook.asks[0].price) if orderbook.asks else None
+
+    if bid_price is not None and ask_price is not None:
+      return float((bid_price + ask_price) / 2)
+    elif bid_price is not None:
+      return float(bid_price)
+    elif ask_price is not None:
+      return float(ask_price)
+    else:
+      raise ValueError(f"Невозможно получить текущую цену для '{ticker}'")
