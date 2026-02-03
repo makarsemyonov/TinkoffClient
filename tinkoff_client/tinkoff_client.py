@@ -1,13 +1,28 @@
 import pandas as pd
 from pathlib import Path
+from decimal import Decimal
+from datetime import datetime, timezone
+
 from tinkoff.invest import Client
+from tinkoff.invest import CandleInterval
 from tinkoff.invest import InstrumentStatus
 from tinkoff.invest import OrderDirection, OrderType
 from tinkoff.invest.utils import quotation_to_decimal, decimal_to_quotation
 from tinkoff.invest import StopOrderDirection, StopOrderExpirationType, StopOrderType
-from decimal import Decimal
+
 
 class TinkoffClient:
+
+  _INTERVAL_MAP = {
+    "1m": CandleInterval.CANDLE_INTERVAL_1_MIN,
+    "5m": CandleInterval.CANDLE_INTERVAL_5_MIN,
+    "15m": CandleInterval.CANDLE_INTERVAL_15_MIN,
+    "1h": CandleInterval.CANDLE_INTERVAL_HOUR,
+    "1d": CandleInterval.CANDLE_INTERVAL_DAY,
+    "1w": CandleInterval.CANDLE_INTERVAL_WEEK,
+    "1mo": CandleInterval.CANDLE_INTERVAL_MONTH,
+  }
+
   def __init__(self, token_file: str):
     path = Path(token_file)
     if not path.is_file():
@@ -182,3 +197,33 @@ class TinkoffClient:
       return float(ask_price)
     else:
       raise ValueError(f"Невозможно получить текущую цену для '{ticker}'")
+  
+  def get_history(self, ticker: str, from_date: datetime, to_date: datetime, interval: str = "1d"):
+    figi = self._get_figi(ticker)
+    
+    if interval not in self._INTERVAL_MAP:
+        raise ValueError(f"Interval '{interval}' не поддерживается. Доступные: {list(self._INTERVAL_MAP.keys())}")
+    
+    ti_interval = self._INTERVAL_MAP[interval]
+    
+    with Client(self.token) as client:
+        candles = client.market_data.get_candles(
+            figi=figi,
+            from_=from_date,
+            to=to_date,
+            interval=ti_interval
+        ).candles
+    
+    data = [
+        {
+            "time": c.time,
+            "open": float(c.open.units + c.open.nano / 1e9),
+            "high": float(c.high.units + c.high.nano / 1e9),
+            "low": float(c.low.units + c.low.nano / 1e9),
+            "close": float(c.close.units + c.close.nano / 1e9),
+            "volume": c.volume,
+        }
+        for c in candles
+    ]
+
+    return pd.DataFrame(data)
