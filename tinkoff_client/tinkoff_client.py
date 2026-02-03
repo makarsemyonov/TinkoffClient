@@ -22,7 +22,14 @@ class TinkoffClient:
       accounts = client.users.get_accounts().accounts
       return pd.DataFrame([{"ID": acc.id, "NAME": acc.name} for acc in accounts])
     
-  def get_figi(self, ticker: str) -> str:
+  def _get_account_id(self, name: str) -> str:
+    accounts = self.get_accounts()
+    match = accounts[accounts["NAME"] == name]
+    if match.empty:
+      raise ValueError(f"Счет с именем '{name}' не найден")
+    return match.iloc[0]["ID"]
+  
+  def _get_figi(self, ticker: str) -> str:
     ticker = ticker.upper()
     with Client(self.token) as client:
       instruments = client.instruments.shares(
@@ -64,9 +71,10 @@ class TinkoffClient:
     return order
 
   def buy(self, account: str, ticker: str, quantity: int, price: float = None):
-    figi = self.get_figi(ticker)
+    account_id = self._get_account_id(account)
+    figi = self._get_figi(ticker)
     order = self._place_order(
-      account=account,
+      account=account_id,
       figi=figi,
       quantity=quantity,
       direction=OrderDirection.ORDER_DIRECTION_BUY,
@@ -77,9 +85,10 @@ class TinkoffClient:
     
 
   def sell(self, account: str, ticker: str, quantity: int, price: float = None):
-    figi = self.get_figi(ticker)
+    account_id = self._get_account_id(account)
+    figi = self._get_figi(ticker)
     order = self._place_order(
-      account=account,
+      account=account_id,
       figi=figi,
       quantity=quantity,
       direction=OrderDirection.ORDER_DIRECTION_SELL,
@@ -89,9 +98,10 @@ class TinkoffClient:
     return  order.order_id
   
   def get_order_state(self, account: str, order_id: str) -> dict:
+    account_id = self._get_account_id(account)
     with Client(self.token) as client:
       state = client.orders.get_order_state(
-        account_id=account,
+        account_id=account_id,
         order_id=order_id
       )
     return {
@@ -105,11 +115,9 @@ class TinkoffClient:
     }
 
   
-  def _place_stop_order(self, account: str, ticker: str,
+  def _place_stop_order(self, account_id: str, figi: str,
     quantity: int, stop_price: float, exec_price: float,
     direction: str, order_type: str) -> str:
-    
-    figi = self.get_figi(ticker)
     stop_order_type_map = {
       "STOP_LOSS": StopOrderType.STOP_ORDER_TYPE_STOP_LOSS,
       "TAKE_PROFIT": StopOrderType.STOP_ORDER_TYPE_TAKE_PROFIT,
@@ -122,7 +130,7 @@ class TinkoffClient:
 
     with Client(self.token) as client:
       resp = client.stop_orders.post_stop_order(
-        account_id=account,
+        account_id=account_id,
         figi=figi,
         quantity=quantity,
         stop_price=stop_q,
@@ -136,13 +144,21 @@ class TinkoffClient:
     return resp.stop_order_id
 
   def long_stop_loss(self, account: str, ticker: str, stop_price: float, exec_price: float, quantity: int):
-    return self._place_stop_order(account, ticker, quantity, stop_price, exec_price, "SELL", "STOP_LOSS")
+    account_id = self._get_account_id(account)
+    figi = self._get_figi(ticker)
+    return self._place_stop_order(account_id, figi, quantity, stop_price, exec_price, "SELL", "STOP_LOSS")
 
   def long_take_profit(self, account: str, ticker: str, stop_price: float, exec_price: float, quantity: int):
-    return self._place_stop_order(account, ticker, quantity, stop_price, exec_price, "SELL", "TAKE_PROFIT")
+    account_id = self._get_account_id(account)
+    figi = self._get_figi(ticker)
+    return self._place_stop_order(account_id, figi, quantity, stop_price, exec_price, "SELL", "TAKE_PROFIT")
 
   def short_stop_loss(self, account: str, ticker: str, stop_price: float, exec_price: float, quantity: int):
-    return self._place_stop_order(account, ticker, quantity, stop_price, exec_price, "BUY", "STOP_LOSS")
+    account_id = self._get_account_id(account)
+    figi = self._get_figi(ticker)
+    return self._place_stop_order(account_id, figi, quantity, stop_price, exec_price, "BUY", "STOP_LOSS")
 
   def short_take_profit(self, account: str, ticker: str, stop_price: float, exec_price: float, quantity: int):
-    return self._place_stop_order(account, ticker, quantity, stop_price, exec_price, "BUY", "TAKE_PROFIT")
+    account_id = self._get_account_id(account)
+    figi = self._get_figi(ticker)
+    return self._place_stop_order(account_id, figi, quantity, stop_price, exec_price, "BUY", "TAKE_PROFIT")
