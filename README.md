@@ -32,3 +32,4 @@ from tinkoff_client import TinkoffClient
 cli = TinkoffClient("TOKEN.txt")
 ```
 
+Примеры использования находятся в папке /examples
