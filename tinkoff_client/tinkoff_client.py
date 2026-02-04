@@ -1,9 +1,9 @@
 import pandas as pd
 from pathlib import Path
 from decimal import Decimal
-from datetime import datetime, timezone
+from datetime import datetime
 
-from tinkoff.invest import Client
+from tinkoff.invest import Client, InstrumentIdType
 from tinkoff.invest import CandleInterval
 from tinkoff.invest import InstrumentStatus
 from tinkoff.invest import OrderDirection, OrderType
@@ -23,6 +23,14 @@ class TinkoffClient:
     "1mo": CandleInterval.CANDLE_INTERVAL_MONTH,
   }
 
+  _OPERATION_TYPE_MAP = {
+    "OPERATION_TYPE_BUY": "BUY",
+    "OPERATION_TYPE_SELL": "SELL",
+    "OPERATION_TYPE_BROKER_FEE": "FEE",
+    "OPERATION_TYPE_INP_MULTI": "DEPOSIT",
+    "OPERATION_TYPE_OUT_MULTI": "WITHDRAW",
+  }
+
   def __init__(self, token_file: str):
     path = Path(token_file)
     if not path.is_file():
@@ -33,9 +41,22 @@ class TinkoffClient:
       raise ValueError("Файл с токеном пуст")
     
   def get_accounts(self) -> pd.DataFrame:
+    rows = []
     with Client(self.token) as client:
       accounts = client.users.get_accounts().accounts
-      return pd.DataFrame([{"ID": acc.id, "NAME": acc.name} for acc in accounts])
+      for acc in accounts:
+        portfolio = client.operations.get_portfolio(account_id=acc.id)
+        balance = (
+          float(portfolio.total_amount_portfolio.units)
+          + float(portfolio.total_amount_portfolio.nano) / 1e9
+        )
+        rows.append({
+          "ID": acc.id,
+          "NAME": acc.name,
+          "OPENED_AT": acc.opened_date.date() if acc.opened_date else None,
+          "BALANCE_RUB": balance
+        })
+    return pd.DataFrame(rows)
     
   def _get_account_id(self, name: str) -> str:
     accounts = self.get_accounts()
@@ -55,6 +76,26 @@ class TinkoffClient:
       raise ValueError(f"FIGI для '{ticker}' не найдено")
     return inst.figi
   
+  def _get_ticker(self, figi: str) -> str:
+    if not figi:
+        return None
+    with Client(self.token) as client:
+      instr = client.instruments.get_instrument_by(
+        id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
+        id=figi
+      ).instrument
+
+    if not instr or not instr.ticker:
+      raise ValueError(f"Инструмент с FIGI {figi} не найден или тикер отсутствует")
+    return instr.ticker
+  
+  def _quotation_to_float(self, q):
+    if q is None:
+        return 0.0
+    if hasattr(q, "units") and hasattr(q, "nano") and q.units == 0 and q.nano == 0:
+        return 0.0
+    return float(quotation_to_decimal(q))
+
   def _place_order( self, account: str, figi: str,
     quantity: int, direction: OrderDirection,
     price: float | None):
@@ -227,3 +268,25 @@ class TinkoffClient:
     ]
 
     return pd.DataFrame(data)
+
+  def get_operations_history(self, account: str, from_date: datetime, to_date: datetime) -> pd.DataFrame:
+    account_id = self._get_account_id(account)
+
+    with Client(self.token) as client:
+      ops = client.operations.get_operations(
+        account_id=account_id,
+        from_=from_date,
+        to=to_date,
+      ).operations
+
+    rows = []
+    for op in ops:
+      rows.append({
+        "time": op.date,
+        "type": self._OPERATION_TYPE_MAP.get(op.operation_type.name),
+        "ticker": self._get_ticker(op.figi),
+        "quantity": op.quantity,
+        "price": self._quotation_to_float(op.price),
+        "payment": self._quotation_to_float(op.payment),
+      })
+    return pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
