@@ -1,7 +1,7 @@
 import pandas as pd
 from pathlib import Path
 from decimal import Decimal
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from tinkoff.invest import Client, InstrumentIdType
 from tinkoff.invest import CandleInterval
@@ -239,35 +239,73 @@ class TinkoffClient:
     else:
       raise ValueError(f"Невозможно получить текущую цену для '{ticker}'")
   
-  def get_history(self, ticker: str, from_date: datetime, to_date: datetime, interval: str = "1d"):
-    figi = self._get_figi(ticker)
-    
-    if interval not in self._INTERVAL_MAP:
-        raise ValueError(f"Interval '{interval}' не поддерживается. Доступные: {list(self._INTERVAL_MAP.keys())}")
-    
-    ti_interval = self._INTERVAL_MAP[interval]
-    
-    with Client(self.token) as client:
-        candles = client.market_data.get_candles(
-            figi=figi,
-            from_=from_date,
-            to=to_date,
-            interval=ti_interval
-        ).candles
-    
-    data = [
-        {
-            "time": c.time,
-            "open": float(c.open.units + c.open.nano / 1e9),
-            "high": float(c.high.units + c.high.nano / 1e9),
-            "low": float(c.low.units + c.low.nano / 1e9),
-            "close": float(c.close.units + c.close.nano / 1e9),
-            "volume": c.volume,
-        }
-        for c in candles
-    ]
 
-    return pd.DataFrame(data)
+  def get_history(self, ticker: str, from_date: datetime,
+      to_date: datetime, interval: str = "1d") -> pd.DataFrame:
+
+      figi = self._get_figi(ticker)
+
+      if interval not in self._INTERVAL_MAP:
+          raise ValueError(
+              f"Interval '{interval}' не поддерживается. "
+              f"Доступные: {list(self._INTERVAL_MAP.keys())}"
+          )
+
+      ti_interval = self._INTERVAL_MAP[interval]
+
+      max_range = {
+          "1m": timedelta(days=1),
+          "5m": timedelta(days=7),
+          "15m": timedelta(days=30),
+          "1h": timedelta(days=30),
+          "1d": timedelta(days=365),
+          "1w": timedelta(days=365 * 5),
+          "1mo": timedelta(days=365 * 10),
+      }
+
+      step = max_range.get(interval)
+      if step is None:
+          raise ValueError(f"Не задан max_range для интервала {interval}")
+
+      all_rows = []
+
+      cur_from = from_date
+
+      with Client(self.token) as client:
+          while cur_from < to_date:
+              cur_to = min(cur_from + step, to_date)
+
+              candles = client.market_data.get_candles(
+                  figi=figi,
+                  from_=cur_from,
+                  to=cur_to,
+                  interval=ti_interval,
+              ).candles
+
+              for c in candles:
+                  all_rows.append({
+                      "time": c.time,
+                      "open": float(c.open.units + c.open.nano / 1e9),
+                      "high": float(c.high.units + c.high.nano / 1e9),
+                      "low": float(c.low.units + c.low.nano / 1e9),
+                      "close": float(c.close.units + c.close.nano / 1e9),
+                      "volume": c.volume,
+                  })
+
+              cur_from = cur_to
+
+      if not all_rows:
+          return pd.DataFrame(
+              columns=["time", "open", "high", "low", "close", "volume"]
+          )
+
+      return (
+          pd.DataFrame(all_rows)
+          .drop_duplicates(subset="time")
+          .sort_values("time")
+          .reset_index(drop=True)
+      )
+
 
   def get_operations_history(self, account: str, from_date: datetime, to_date: datetime) -> pd.DataFrame:
     account_id = self._get_account_id(account)
