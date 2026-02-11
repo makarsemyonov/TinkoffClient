@@ -241,70 +241,68 @@ class TinkoffClient:
   
 
   def get_history(self, ticker: str, from_date: datetime,
-      to_date: datetime, interval: str = "1d") -> pd.DataFrame:
+    to_date: datetime, interval: str = "1d") -> pd.DataFrame:
 
-      figi = self._get_figi(ticker)
+    figi = self._get_figi(ticker)
 
-      if interval not in self._INTERVAL_MAP:
-          raise ValueError(
-              f"Interval '{interval}' не поддерживается. "
-              f"Доступные: {list(self._INTERVAL_MAP.keys())}"
-          )
-
-      ti_interval = self._INTERVAL_MAP[interval]
-
-      max_range = {
-          "1m": timedelta(days=1),
-          "5m": timedelta(days=7),
-          "15m": timedelta(days=30),
-          "1h": timedelta(days=30),
-          "1d": timedelta(days=365),
-          "1w": timedelta(days=365 * 5),
-          "1mo": timedelta(days=365 * 10),
-      }
-
-      step = max_range.get(interval)
-      if step is None:
-          raise ValueError(f"Не задан max_range для интервала {interval}")
-
-      all_rows = []
-
-      cur_from = from_date
-
-      with Client(self.token) as client:
-          while cur_from < to_date:
-              cur_to = min(cur_from + step, to_date)
-
-              candles = client.market_data.get_candles(
-                  figi=figi,
-                  from_=cur_from,
-                  to=cur_to,
-                  interval=ti_interval,
-              ).candles
-
-              for c in candles:
-                  all_rows.append({
-                      "time": c.time,
-                      "open": float(c.open.units + c.open.nano / 1e9),
-                      "high": float(c.high.units + c.high.nano / 1e9),
-                      "low": float(c.low.units + c.low.nano / 1e9),
-                      "close": float(c.close.units + c.close.nano / 1e9),
-                      "volume": c.volume,
-                  })
-
-              cur_from = cur_to
-
-      if not all_rows:
-          return pd.DataFrame(
-              columns=["time", "open", "high", "low", "close", "volume"]
-          )
-
-      return (
-          pd.DataFrame(all_rows)
-          .drop_duplicates(subset="time")
-          .sort_values("time")
-          .reset_index(drop=True)
+    if interval not in self._INTERVAL_MAP:
+      raise ValueError(
+        f"Interval '{interval}' не поддерживается. "
+        f"Доступные: {list(self._INTERVAL_MAP.keys())}"
       )
+
+    ti_interval = self._INTERVAL_MAP[interval]
+
+    max_range = {
+      "1m": timedelta(days=1),
+      "5m": timedelta(days=7),
+      "15m": timedelta(days=30),
+      "1h": timedelta(days=30),
+      "1d": timedelta(days=365),
+      "1w": timedelta(days=365 * 5),
+      "1mo": timedelta(days=365 * 10),
+    }
+
+    step = max_range.get(interval)
+
+    all_rows = []
+
+    cur_from = from_date
+
+    with Client(self.token) as client:
+      while cur_from < to_date:
+        cur_to = min(cur_from + step, to_date)
+
+        candles = client.market_data.get_candles(
+          figi=figi,
+          from_=cur_from,
+          to=cur_to,
+          interval=ti_interval,
+        ).candles
+
+        for c in candles:
+          all_rows.append({
+            "time": c.time,
+            "open": float(c.open.units + c.open.nano / 1e9),
+            "high": float(c.high.units + c.high.nano / 1e9),
+            "low": float(c.low.units + c.low.nano / 1e9),
+            "close": float(c.close.units + c.close.nano / 1e9),
+            "volume": c.volume,
+          })
+
+        cur_from = cur_to
+
+    if not all_rows:
+      return pd.DataFrame(
+        columns=["time", "open", "high", "low", "close", "volume"]
+    )
+
+    return (
+      pd.DataFrame(all_rows)
+      .drop_duplicates(subset="time")
+      .sort_values("time")
+      .reset_index(drop=True)
+    )
 
 
   def get_operations_history(self, account: str, from_date: datetime, to_date: datetime) -> pd.DataFrame:
@@ -328,3 +326,38 @@ class TinkoffClient:
         "payment": self._quotation_to_float(op.payment),
       })
     return pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
+  
+  def get_positions(self, account: str) -> pd.DataFrame:
+    account_id = self._get_account_id(account)
+
+    rows = []
+
+    with Client(self.token) as client:
+      portfolio = client.operations.get_portfolio(account_id=account_id)
+      for pos in portfolio.positions:
+        quantity = self._quotation_to_float(pos.quantity)
+        avg_price = self._quotation_to_float(pos.average_position_price)
+        current_price = self._quotation_to_float(pos.current_price)
+        expected_yield = self._quotation_to_float(pos.expected_yield)
+        return_pct = (
+          (current_price - avg_price) / avg_price * 100
+          if avg_price > 0 else 0.0
+        )
+
+        rows.append({
+          "figi": pos.figi,
+          "ticker": self._get_ticker(pos.figi) if pos.figi else None,
+          "instrument_type": pos.instrument_type,
+          "quantity": quantity,
+          "average_price": avg_price,
+          "current_price": current_price,
+          "expected_yield": expected_yield,
+          "return_pct": return_pct,
+        })
+
+    df = pd.DataFrame(rows)
+
+    if df.empty:
+      return df
+
+    return df.sort_values("expected_yield", ascending=False).reset_index(drop=True)
