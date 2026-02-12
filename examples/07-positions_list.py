@@ -2,6 +2,6 @@ from tinkoff_client import TinkoffClient
 
 cli = TinkoffClient("TOKEN.txt")
 
-df = cli.get_positions("Облигации")
+df = cli.portfolio.get_positions("Облигации")
 
 print(df)
