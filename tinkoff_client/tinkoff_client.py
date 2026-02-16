@@ -263,6 +263,25 @@ class MarketDataService:
         "floating_coupon": getattr(bond, "floating_coupon_flag", None),
         "amortization": getattr(bond, "amortization_flag", None),
     }
+  
+  def stock_info(self, ticker: str) -> dict:
+    figi = self.get_figi(ticker, "share")
+    with Client(self.token) as client:
+      stock = client.instruments.share_by(
+        id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
+        id=figi
+      ).instrument
+    print(stock)
+    return {
+        "ticker": getattr(stock, "ticker", None),
+        "name": getattr(stock, "name", None),
+        "currency": getattr(stock, "currency", None),
+        "lot": getattr(stock, "lot", None),
+        "isin": getattr(stock, "isin", None),
+        "figi": getattr(stock, "figi", None),
+        "sector": getattr(stock, "sector", None),
+    }
+
 
 class TradeService:
 
@@ -513,6 +532,61 @@ class PortfolioService:
         ["Сумма инвестиций", f"{total_invested:.2f}", "RUB"],
         ["Суммарный ежемесячный купон", f"{total_monthly_coupon:.2f}", "RUB"],
         ["Годовая доходность по купону", f"{annual_yield_pct:.2f}", "%"],
+    ]
+
+    print(tabulate(summary_table, headers=["Показатель", "Значение", "Ед. изм."], tablefmt="pretty"))
+
+  def stocks(self, account: str) -> pd.DataFrame:
+    df = self.get_positions(account)
+    if df.empty:
+        return df
+
+    stock_positions = df[df['instrument_type'].str.lower() == 'share'].copy()
+    if stock_positions.empty:
+      return pd.DataFrame(columns=[
+        "ticker", "name", "quantity", "average_price", "current_price",
+        "unrealized_profit", "return_pct"
+      ])
+
+    stock_info_list = []
+    for _, row in stock_positions.iterrows():
+      try:
+        current_price = self.market_data_service.get_current_price(row['ticker'])
+        quantity = row['quantity']
+        avg_price = row['average_price']
+        unrealized_profit = (current_price - avg_price) * quantity
+        return_pct = ((current_price - avg_price) / avg_price * 100) if avg_price > 0 else 0.0
+        stock_info_list.append({
+          "ticker": row['ticker'],
+          "name": row.get('ticker'), 
+          "quantity": quantity,
+          "average_price": avg_price,
+          "current_price": current_price,
+          "unrealized_profit": unrealized_profit,
+          "return_pct": return_pct,
+        })
+
+      except Exception as e:
+        print(f"Ошибка при получении данных для {row['ticker']}: {e}")
+
+    return pd.DataFrame(stock_info_list).sort_values("unrealized_profit", ascending=False).reset_index(drop=True)
+
+  def stocks_summary(self, account: str):
+    
+    df_stocks = self.stocks(account)
+    if df_stocks.empty:
+        print("Нет акций на этом счете.")
+        return
+    total_invested = (df_stocks['quantity'] * df_stocks['average_price']).sum()
+    total_current_value = (df_stocks['quantity'] * df_stocks['current_price']).sum()
+    total_unrealized_profit = (total_current_value - total_invested)
+    return_pct = (total_unrealized_profit / total_invested * 100) if total_invested > 0 else 0.0
+
+    summary_table = [
+      ["Сумма инвестиций", f"{total_invested:.2f}", "RUB"],
+      ["Текущая стоимость", f"{total_current_value:.2f}", "RUB"],
+      ["Нереализованная прибыль", f"{total_unrealized_profit:.2f}", "RUB"],
+      ["Доходность", f"{return_pct:.2f}", "%"],
     ]
 
     print(tabulate(summary_table, headers=["Показатель", "Значение", "Ед. изм."], tablefmt="pretty"))
