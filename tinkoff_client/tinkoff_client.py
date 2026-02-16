@@ -3,7 +3,7 @@ from pathlib import Path
 from decimal import Decimal
 from datetime import datetime, timedelta
 
-from tinkoff.invest import Client, InstrumentIdType
+from tinkoff.invest import Client, InstrumentIdType, InstrumentType
 from tinkoff.invest import CandleInterval
 from tinkoff.invest import InstrumentStatus
 from tinkoff.invest import OrderDirection, OrderType
@@ -71,19 +71,52 @@ class MarketDataService:
     "1mo": CandleInterval.CANDLE_INTERVAL_MONTH,
   }
 
+  _FX_TICKERS = {
+    ("USD", "RUB"): "USD000UTSTOM",
+    ("EUR", "RUB"): "EUR_RUB__TOM",
+  }
+
   def __init__(self, token: str):
     self.token = token
 
-  def get_figi(self, ticker: str) -> str:
+  def _money_to_float(self, m):
+    return float(m.units + m.nano / 1e9) if m else 0.0
+    
+  def convert_currency(self, from_currency: str, to_currency: str, amount: float | None = None) -> float:
+    from_currency = from_currency.upper()
+    to_currency = to_currency.upper()
+
+    if from_currency == to_currency:
+      return amount if amount is not None else 1.0
+
+    ticker = self._FX_TICKERS.get((from_currency, to_currency))
+    if not ticker:
+      raise ValueError(f"Нет валютной пары {from_currency}/{to_currency}")
+
+    with Client(self.token) as client:
+      instrument = client.instruments.find_instrument(query=ticker).instruments[0]
+      price = client.market_data.get_last_prices(figi=[instrument.figi]).last_prices[0]
+      rate = self._money_to_float(price.price)
+
+    if amount is not None:
+      return amount * rate
+    return rate
+
+  def get_figi(self, ticker: str, instrument_type: str = "share") -> str:
     ticker = ticker.upper()
     with Client(self.token) as client:
-      instruments = client.instruments.shares(
-        instrument_status=InstrumentStatus.INSTRUMENT_STATUS_BASE
-      ).instruments
-    inst = next((i for i in instruments if i.ticker == ticker), None)
-    if inst is None:
-      raise ValueError(f"FIGI для '{ticker}' не найдено")
+      if instrument_type.lower() == "share":
+        instruments = client.instruments.shares(
+          instrument_status=InstrumentStatus.INSTRUMENT_STATUS_BASE
+        ).instruments
+        inst = next((i for i in instruments if i.ticker == ticker), None)
+      elif instrument_type.lower() == "bond":
+        instruments = client.instruments.find_instrument(query=ticker).instruments 
+        inst = next((i for i in instruments if i.instrument_kind == InstrumentType.INSTRUMENT_TYPE_BOND), None)
+    if not inst:
+      raise ValueError(f"FIGI для '{ticker}' с типом '{instrument_type}' не найдено")
     return inst.figi
+
   
   def get_ticker(self, figi: str) -> str:
     if not figi:
@@ -119,7 +152,6 @@ class MarketDataService:
       return float(ask_price)
     else:
       raise ValueError(f"Невозможно получить текущую цену для '{ticker}'")
-  
   
   def get_history(self, ticker: str, from_date: datetime,
     to_date: datetime, interval: str = "1d") -> pd.DataFrame:
@@ -184,6 +216,53 @@ class MarketDataService:
       .sort_values("time")
       .reset_index(drop=True)
     )
+  
+  def bond_info(self, ticker: str) -> dict:
+    figi = self.get_figi(ticker, "bond")
+    monthly_coupon = 0.0
+    coupon_currency = None
+
+    with Client(self.token) as client:
+      bond = client.instruments.bond_by(
+        id_type=InstrumentIdType.INSTRUMENT_ID_TYPE_FIGI,
+        id=figi
+      ).instrument
+      coupons = client.instruments.get_bond_coupons(figi=figi).events
+    
+    valid_coupons = [
+      c for c in coupons
+      if getattr(c, "pay_one_bond", None) and
+      (getattr(c.pay_one_bond, "units", 0) != 0 or getattr(c.pay_one_bond, "nano", 0) != 0)
+    ]
+
+    if valid_coupons:
+      last_coupon = max(valid_coupons, key=lambda x: x.coupon_date)
+      coupon_currency = last_coupon.pay_one_bond.currency
+
+      coupon_quantity = getattr(bond, "coupon_quantity_per_year", 0)
+      if coupon_currency == "RUB":
+        coupon_amount = self._money_to_float(last_coupon.pay_one_bond)
+      else:
+        coupon_amount = self.convert_currency(coupon_currency, "RUB", self._money_to_float(last_coupon.pay_one_bond))
+
+      monthly_coupon = coupon_amount * coupon_quantity / 12
+
+    return {
+        "ticker": getattr(bond, "ticker", None),
+        "name": getattr(bond, "name", None),
+        "bond_currency": getattr(bond, "currency", None),
+        "nominal_currency": getattr(getattr(bond, "nominal", None), "currency", None),
+        "coupon_currency": coupon_currency,
+        "nominal": self._money_to_float(getattr(bond, "nominal", None)),
+        "initial_nominal": self._money_to_float(getattr(bond, "initial_nominal", None)),
+        "aci_value": self._money_to_float(getattr(bond, "aci_value", None)),
+        "monthly_coupon": monthly_coupon,
+        "coupon_quantity_per_year": getattr(bond, "coupon_quantity_per_year", None),
+        "maturity_date": getattr(getattr(bond, "maturity_date", None), "date", lambda: None)(),
+        "placement_date": getattr(getattr(bond, "placement_date", None), "date", lambda: None)(),
+        "floating_coupon": getattr(bond, "floating_coupon_flag", None),
+        "amortization": getattr(bond, "amortization_flag", None),
+    }
 
 class TradeService:
 
