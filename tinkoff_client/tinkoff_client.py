@@ -2,7 +2,7 @@ import pandas as pd
 from pathlib import Path
 from decimal import Decimal
 from datetime import datetime, timedelta
-
+from tabulate import tabulate
 from tinkoff.invest import Client, InstrumentIdType, InstrumentType
 from tinkoff.invest import CandleInterval
 from tinkoff.invest import InstrumentStatus
@@ -393,7 +393,6 @@ class TradeService:
     return self._place_stop_order(account_id, figi, quantity, stop_price, exec_price, "BUY", "TAKE_PROFIT")
 
 class PortfolioService:
-
   _OPERATION_TYPE_MAP = {
     "OPERATION_TYPE_BUY": "BUY",
     "OPERATION_TYPE_SELL": "SELL",
@@ -466,3 +465,54 @@ class PortfolioService:
         "payment": self._quotation_to_float(op.payment),
       })
     return pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
+  
+  def bonds(self, account: str) -> pd.DataFrame:
+    df = self.get_positions(account)
+    if df.empty:
+      return df
+    
+    bond_positions = df[df['instrument_type'].str.lower() == 'bond'].copy()
+    if bond_positions.empty:
+      return pd.DataFrame(columns=[
+        "ticker", "name", "quantity", "average_price", "nominal",
+        "monthly_coupon", "total_monthly_coupon", "coupon_yield_pct"
+      ])
+
+    bond_info_list = []
+    for _, row in bond_positions.iterrows():
+      try:
+        info = self.market_data_service.bond_info(row['ticker'])
+        monthly_coupon_per_bond = info.get('monthly_coupon', 0.0)
+        nominal = info.get('nominal', 0.0)
+
+        bond_info_list.append({
+            "ticker": row['ticker'],
+            "name": info.get('name'),
+            "quantity": row['quantity'],
+            "average_price": row['average_price'],
+            "nominal": nominal,
+            "monthly_coupon": monthly_coupon_per_bond,
+        })
+
+      except Exception as e:
+        print(f"Ошибка при получении данных для {row['ticker']}: {e}")
+
+    return pd.DataFrame(bond_info_list).sort_values("monthly_coupon", ascending=False).reset_index(drop=True)
+
+  def bonds_summary(self, account: str):
+    df_bonds = self.bonds(account)
+    if df_bonds.empty:
+        print("Нет облигаций на этом счете.")
+        return
+    
+    total_invested = (df_bonds['quantity'] * df_bonds['average_price']).sum()
+    total_monthly_coupon = (df_bonds['quantity'] * df_bonds['monthly_coupon']).sum()
+    annual_yield_pct = (total_monthly_coupon * 12 / total_invested * 100) if total_invested > 0 else 0.0
+
+    summary_table = [
+        ["Сумма инвестиций", f"{total_invested:.2f}", "RUB"],
+        ["Суммарный ежемесячный купон", f"{total_monthly_coupon:.2f}", "RUB"],
+        ["Годовая доходность по купону", f"{annual_yield_pct:.2f}", "%"],
+    ]
+
+    print(tabulate(summary_table, headers=["Показатель", "Значение", "Ед. изм."], tablefmt="pretty"))
